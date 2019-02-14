@@ -164,11 +164,22 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
                     const fileSearchResultItems: QuickOpenItem[] = [];
                     for (const fileUri of results) {
                         if (!alreadyCollected.has(fileUri)) {
-                            fileSearchResultItems.push(await this.toItem(fileUri, fileSearchResultItems.length === 0 ? 'file results' : undefined));
+                            fileSearchResultItems.push(await this.toItem(fileUri));
                             alreadyCollected.add(fileUri);
                         }
                     }
-                    acceptor([...recentlyUsedItems, ...fileSearchResultItems]);
+
+                    // Create a copy of the file search results and sort.
+                    const sortedResults = fileSearchResultItems.slice();
+                    sortedResults.sort((a, b) => this.compareItems(a, b));
+
+                    // Extract the first element, and re-add it to the array with the group label.
+                    const first = sortedResults[0];
+                    sortedResults.shift();
+                    sortedResults.unshift(await this.toItem(first.getUri()!, 'file results'));
+
+                    // Return the recently used items, followed by the search results.
+                    acceptor([...recentlyUsedItems, ...sortedResults]);
                 }
             };
             this.fileSearchService.find(lookFor, {
@@ -190,6 +201,79 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
             this.openFile(uri);
             return true;
         };
+    }
+
+    /**
+     * Compare two `QuickOpenItem`.
+     *
+     * @param a `QuickOpenItem` for comparison.
+     * @param b `QuickOpenItem` for comparison.
+     * @param member the `QuickOpenItem` object member for comparison.
+     */
+    protected compareItems(
+        a: QuickOpenItem<QuickOpenItemOptions>,
+        b: QuickOpenItem<QuickOpenItemOptions>,
+        member: 'getLabel' | 'getUri' = 'getLabel'): number {
+
+        /**
+         * Compare two numbers.
+         *
+         * @param x number for comparison.
+         * @param y number for comparison.
+         */
+        function cmp(x: number, y: number): number {
+            return x === y ? 0 : (x > y ? 1 : -1);
+        }
+
+        // Get the item's member values used for comparison.
+        let itemA = a[member]()!;
+        let itemB = b[member]()!;
+
+        // If the `URI` is used as a comparison member, perform the necessary string conversions.
+        if (typeof itemA !== 'string') {
+            itemA = itemA.path.toString();
+        }
+        if (typeof itemB !== 'string') {
+            itemB = itemB.path.toString();
+        }
+
+        // Normalize the string values for consistent comparison.
+        itemA = itemA.trim().toLowerCase();
+        itemB = itemB.trim().toLowerCase();
+
+        // Determine the index of the substring match.
+        const indexA = itemA.indexOf(this.currentLookFor);
+        const indexB = itemB.indexOf(this.currentLookFor);
+
+        // If both indexes do not yield a match, return 0 (do nothing).
+        if (indexA === -1 && indexB === -1) {
+            return 0;
+        }
+
+        // If any given index does not yield a match, invert the `cmp` logic (favor the order of the matched index).
+        if (indexA === -1 || indexB === -1) {
+            return indexA === -1 ? 1 : -1;
+        }
+
+        // If both indexes are equal, fallback to alphabetical comparison.
+        if (indexA === indexB) {
+
+            // Favor matches which have smaller label lengths.
+            if (itemA.length !== itemB.length) {
+                return (itemA.length < itemB.length) ? -1 : 1;
+            }
+
+            const comparison = itemA.localeCompare(itemB);
+
+            // If the alphabetical comparison is equal, call `compareItem` recursively using the `URI` member instead.
+            if (comparison === 0) {
+                return this.compareItems(a, b, 'getUri');
+            }
+
+            return comparison;
+        }
+
+        return cmp(indexA, indexB);
     }
 
     openFile(uri: URI): void {
